@@ -1,0 +1,6 @@
+{
+  "name": "Teacher Ledger",
+  "description": "An offline-first, student fee and dues tracker designed for teachers. Beautifully manages students, payments, summaries, exportable ledger sheets, and secure backup.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
