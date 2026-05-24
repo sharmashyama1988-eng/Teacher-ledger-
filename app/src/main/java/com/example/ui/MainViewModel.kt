@@ -304,7 +304,14 @@ class MainViewModel(
                 putExtra(Intent.EXTRA_SUBJECT, title)
                 putExtra(Intent.EXTRA_TEXT, csvContent)
             }
-            context.startActivity(Intent.createChooser(intent, "Share Ledger File to Excel"))
+            try {
+                val chooserIntent = Intent.createChooser(intent, "Share Ledger File to Excel").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(chooserIntent)
+            } catch (e: Exception) {
+                android.widget.Toast.makeText(context, "Sharing failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -322,7 +329,14 @@ class MainViewModel(
                 putExtra(Intent.EXTRA_SUBJECT, "TeacherLedger_Backup.json")
                 putExtra(Intent.EXTRA_TEXT, backupStr)
             }
-            context.startActivity(Intent.createChooser(intent, "Share Secure Backup File (JSON)"))
+            try {
+                val chooserIntent = Intent.createChooser(intent, "Share Secure Backup File (JSON)").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(chooserIntent)
+            } catch (e: Exception) {
+                android.widget.Toast.makeText(context, "Sharing backup failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
 

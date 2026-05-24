@@ -60,6 +60,14 @@ class SettingsManager(context: Context) {
         get() = prefs.getBoolean("firebase_sync_active", false)
         set(value) = prefs.edit().putBoolean("firebase_sync_active", value).apply()
 
+    var upiId: String
+        get() = prefs.getString("upi_id", "") ?: ""
+        set(value) = prefs.edit().putString("upi_id", value).apply()
+
+    var academyName: String
+        get() = prefs.getString("academy_name", "") ?: ""
+        set(value) = prefs.edit().putString("academy_name", value).apply()
+
     fun logoutFirebase() {
         prefs.edit().remove("firebase_user_email").putBoolean("firebase_sync_active", false).apply()
     }

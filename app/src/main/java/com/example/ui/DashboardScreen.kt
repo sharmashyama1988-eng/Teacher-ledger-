@@ -2,10 +2,14 @@ package com.example.ui
 
 import android.content.Context
 import android.widget.Toast
+import android.net.Uri
+import android.content.Intent
+import coil.compose.AsyncImage
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -267,7 +271,7 @@ fun PinLockScreen(onVerify: (String) -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalAnimationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun MainContainer(viewModel: MainViewModel) {
     var currentTab by remember { mutableStateOf(AppTab.DASHBOARD) }
@@ -304,12 +308,24 @@ fun MainContainer(viewModel: MainViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            when (currentTab) {
-                AppTab.DASHBOARD -> DashboardTab(viewModel = viewModel)
-                AppTab.STUDENTS -> StudentsDirectoryTab(viewModel = viewModel)
-                AppTab.TOOLS -> TeacherToolsTab(viewModel = viewModel)
-                AppTab.NOTES -> TeacherNotesTab(viewModel = viewModel)
-                AppTab.SETTINGS -> SettingsPropertyTab(viewModel = viewModel)
+            AnimatedContent(
+                targetState = currentTab,
+                transitionSpec = {
+                    val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
+                    (slideInHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow)) { width -> direction * width / 4 } + 
+                     fadeIn(animationSpec = tween(durationMillis = 180))) togetherWith
+                    (slideOutHorizontally(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)) { width -> direction * -width / 4 } + 
+                     fadeOut(animationSpec = tween(durationMillis = 140)))
+                },
+                label = "TabTransition"
+            ) { targetState ->
+                when (targetState) {
+                    AppTab.DASHBOARD -> DashboardTab(viewModel = viewModel)
+                    AppTab.STUDENTS -> StudentsDirectoryTab(viewModel = viewModel)
+                    AppTab.TOOLS -> TeacherToolsTab(viewModel = viewModel)
+                    AppTab.NOTES -> TeacherNotesTab(viewModel = viewModel)
+                    AppTab.SETTINGS -> SettingsPropertyTab(viewModel = viewModel)
+                }
             }
         }
     }
@@ -326,6 +342,8 @@ fun DashboardTab(viewModel: MainViewModel) {
     val transactions by viewModel.allTransactions.collectAsState()
     val students by viewModel.allStudents.collectAsState()
     val isDarkMode by viewModel.isDarkMode.collectAsState()
+
+    val pendingCount = remember(students) { students.count { !it.status.equals("PAID", ignoreCase = true) } }
 
     var showCollectReceiptDialog by remember { mutableStateOf(false) }
 
@@ -446,7 +464,6 @@ fun DashboardTab(viewModel: MainViewModel) {
                             color = MaterialTheme.colorScheme.error
                         )
                         Spacer(modifier = Modifier.height(10.dp))
-                        val pendingCount = students.count { !it.status.equals("PAID", ignoreCase = true) }
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
@@ -648,10 +665,14 @@ fun DashboardTab(viewModel: MainViewModel) {
                 }
             }
         } else {
-            items(transactions.take(5)) { tx ->
+            items(
+                items = transactions.take(5),
+                key = { tx -> tx.id }
+            ) { tx ->
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .animateItem()
                         .premiumCardBorder(isDarkMode, RoundedCornerShape(12.dp)),
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(
@@ -903,12 +924,20 @@ fun StudentsDirectoryTab(viewModel: MainViewModel) {
                     Text("No students found matching current filters.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 14.sp)
                 }
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(students) { student ->
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(
+                        items = students,
+                        key = { student -> student.id }
+                    ) { student ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .animateItem()
                                 .premiumCardBorder(isDarkMode, RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(12.dp))
                                 .clickable { viewingStudent = student },
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(
@@ -998,6 +1027,7 @@ fun StudentsDirectoryTab(viewModel: MainViewModel) {
     // --- Action Sheet/Dialog to view Student and log fees/sync ---
     viewingStudent?.let { student ->
         var showSingleStudentFeeCollectDialog by remember { mutableStateOf(false) }
+        var showUpiQrDialog by remember { mutableStateOf(false) }
 
         AlertDialog(
             onDismissRequest = { viewingStudent = null },
@@ -1054,7 +1084,153 @@ fun StudentsDirectoryTab(viewModel: MainViewModel) {
                         Text("Last Payment Received: $formattedDate", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    // Smart Payment & Reminder Suite
+                    if (student.balancePending > 0.0) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isDarkMode) Color(0xFF2C2A33) else Color(0xFFF6F3F8)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Send,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        "Smart Payment & Reminders",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Text(
+                                    "Send direct alerts with auto-filled payment details or generate on-screen UPI QR code for parent scanning.",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    // Button 1: QR code popup
+                                    OutlinedButton(
+                                        onClick = { showUpiQrDialog = true },
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(imageVector = Icons.Default.QrCode, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Show QR", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    // Button 2: WhatsApp Hinglish reminder
+                                    Button(
+                                        onClick = {
+                                            val academyText = viewModel.settings.academyName
+                                            val upiText = viewModel.settings.upiId
+                                            val hinglishMsg = "नमस्ते! ${if (academyText.isNotEmpty()) academyText else "ट्यूशन क्लासेज"} से ${student.name} के बकाया ट्यूशन फीस (₹${student.balancePending.toInt()}) का भुगतान याद दिलाने के लिए यह संदेश है।\n" +
+                                                    "कुल फीस: ₹${student.totalFee.toInt()}\n" +
+                                                    "जमा फीस: ₹${student.paidAmount.toInt()}\n" +
+                                                    "बकाया राशि: ₹${student.balancePending.toInt()}\n\n" +
+                                                    "कृपया बकाया फीस का भुगतान इस UPI आईडी पर करें: ${if (upiText.isNotEmpty()) upiText else "नोटीफाइड UPI"}\n" +
+                                                    (if (upiText.isNotEmpty()) "भुगतान डायरेक्ट लिंक: upi://pay?pa=$upiText&pn=${Uri.encode(academyText)}&am=${student.balancePending}&cu=INR\n" else "") +
+                                                    "धन्यवाद!"
+                                            try {
+                                                val cleanPhone = student.phone.replace("+", "").replace("-", "").replace(" ", "").trim()
+                                                val formattedNumber = if (cleanPhone.length == 10) "91$cleanPhone" else cleanPhone
+                                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    data = Uri.parse("https://api.whatsapp.com/send?phone=$formattedNumber&text=${Uri.encode(hinglishMsg)}")
+                                                }
+                                                context.startActivity(intent)
+                                            } catch (e: Exception) {
+                                                try {
+                                                    val sendIntent = Intent().apply {
+                                                        action = Intent.ACTION_SEND
+                                                        putExtra(Intent.EXTRA_TEXT, hinglishMsg)
+                                                        type = "text/plain"
+                                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    }
+                                                    val shareIntent = Intent.createChooser(sendIntent, "Share Hinglish Reminder").apply {
+                                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    }
+                                                    context.startActivity(shareIntent)
+                                                } catch (ex: Exception) {
+                                                    Toast.makeText(context, "Cannot open Share Sheet: ${ex.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = PaidGreenTextLight),
+                                        modifier = Modifier.weight(1.2f),
+                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(imageVector = Icons.Default.Send, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color.White)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Hinglish WA", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                    }
+
+                                    // Button 3: WhatsApp English reminder
+                                    Button(
+                                        onClick = {
+                                            val academyText = viewModel.settings.academyName
+                                            val upiText = viewModel.settings.upiId
+                                            val englishMsg = "Hello! This is a reminder from ${if (academyText.isNotEmpty()) academyText else "Tuition Classes"} regarding the outstanding tuition fee for student ${student.name}.\n" +
+                                                    "Total Fee: ₹${student.totalFee.toInt()}\n" +
+                                                    "Amount Paid: ₹${student.paidAmount.toInt()}\n" +
+                                                    "Pending Dues: ₹${student.balancePending.toInt()}\n\n" +
+                                                    "Kindly pay the pending dues via UPI directly to ID: ${if (upiText.isNotEmpty()) upiText else "provided UPI ID"}\n" +
+                                                    (if (upiText.isNotEmpty()) "Direct Pay link: upi://pay?pa=$upiText&pn=${Uri.encode(academyText)}&am=${student.balancePending}&cu=INR\n" else "") +
+                                                    "Thank you!"
+                                            try {
+                                                val cleanPhone = student.phone.replace("+", "").replace("-", "").replace(" ", "").trim()
+                                                val formattedNumber = if (cleanPhone.length == 10) "91$cleanPhone" else cleanPhone
+                                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    data = Uri.parse("https://api.whatsapp.com/send?phone=$formattedNumber&text=${Uri.encode(englishMsg)}")
+                                                }
+                                                context.startActivity(intent)
+                                            } catch (e: Exception) {
+                                                try {
+                                                    val sendIntent = Intent().apply {
+                                                        action = Intent.ACTION_SEND
+                                                        putExtra(Intent.EXTRA_TEXT, englishMsg)
+                                                        type = "text/plain"
+                                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    }
+                                                    val shareIntent = Intent.createChooser(sendIntent, "Share English Reminder").apply {
+                                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    }
+                                                    context.startActivity(shareIntent)
+                                                } catch (ex: Exception) {
+                                                    Toast.makeText(context, "Cannot open Share Sheet: ${ex.localizedMessage}", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                                        modifier = Modifier.weight(1.2f),
+                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(imageVector = Icons.Default.Language, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("English WA", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
 
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1107,6 +1283,98 @@ fun StudentsDirectoryTab(viewModel: MainViewModel) {
                 }
             }
         )
+
+        // Nested Dialog for QR Code Presentation
+        if (showUpiQrDialog) {
+            val academyText = viewModel.settings.academyName
+            val upiText = viewModel.settings.upiId
+            
+            AlertDialog(
+                onDismissRequest = { showUpiQrDialog = false },
+                title = { Text("Scan to Pay: ${student.name}", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+                text = {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (upiText.isEmpty()) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Text(
+                                "UPI ID is not configured! Please configure your UPI VPA ID in the Settings tab first to generate scan QR codes.",
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
+                        } else {
+                            val upiUrl = "upi://pay?pa=$upiText&pn=${Uri.encode(academyText)}&am=${student.balancePending}&cu=INR&tn=${Uri.encode("TuitionFee_${student.name}")}"
+                            val qrCodeUrl = "https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${Uri.encode(upiUrl)}"
+                            
+                            Box(
+                                modifier = Modifier
+                                    .size(200.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.White)
+                                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                                    .padding(8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                AsyncImage(
+                                    model = qrCodeUrl,
+                                    contentDescription = "Scan to Pay QR Code",
+                                    modifier = Modifier.fillMaxSize(),
+                                    alignment = Alignment.Center
+                                )
+                            }
+                            
+                            Text(
+                                "Outstanding Dues: ₹${student.balancePending.toInt()}",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            
+                            Text(
+                                "UPI ID: $upiText\nAcademy: ${academyText.ifEmpty { "Tuition Classes" }}",
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+
+                            // Pay on device
+                            Button(
+                                onClick = {
+                                    try {
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(upiUrl)).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "No local UPI apps found to process deep link!", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().height(40.dp)
+                            ) {
+                                Icon(imageVector = Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Pay on Device (Open UPI apps)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showUpiQrDialog = false }) {
+                        Text("Dismiss")
+                    }
+                }
+            )
+        }
 
         // Nested Dialog for collecting specific student's payment receipts
         if (showSingleStudentFeeCollectDialog) {
@@ -1314,12 +1582,20 @@ fun TeacherNotesTab(viewModel: MainViewModel) {
                     Text("No teacher remarks or notes logged.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), fontSize = 14.sp)
                 }
             } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(notes) { note ->
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(
+                        items = notes,
+                        key = { note -> note.id }
+                    ) { note ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .animateItem()
                                 .premiumCardBorder(isDarkMode, RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(12.dp))
                                 .clickable { viewingNote = note },
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(
@@ -1517,6 +1793,10 @@ fun SettingsPropertyTab(viewModel: MainViewModel) {
     var formPaid by remember { mutableStateOf(viewModel.settings.formEntryPaid) }
     var formBalance by remember { mutableStateOf(viewModel.settings.formEntryBalance) }
 
+    // UPI academy configuration state
+    var upiId by remember { mutableStateOf(viewModel.settings.upiId) }
+    var academyName by remember { mutableStateOf(viewModel.settings.academyName) }
+
     // Backup import text box
     var showImportBackupDialog by remember { mutableStateOf(false) }
 
@@ -1541,6 +1821,81 @@ fun SettingsPropertyTab(viewModel: MainViewModel) {
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary
             )
+        }
+
+        // Section: Academy & UPI Payment configuration Card
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .premiumCardBorder(isDarkTheme, RoundedCornerShape(12.dp)),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isDarkTheme) Color(0xFF201E24) else Color.White
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCode,
+                            contentDescription = "Payment Config",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "Academy & UPI Payment Config",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Text(
+                        text = "Set up your academy name and UPI ID. This allows parents to pay you directly via scanning dynamic QR codes or opening automated WhatsApp links.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                    
+                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+
+                    OutlinedTextField(
+                        value = academyName,
+                        onValueChange = {
+                            academyName = it
+                            viewModel.settings.academyName = it
+                        },
+                        label = { Text("Academy / Specialist Name", fontSize = 11.sp) },
+                        placeholder = { Text("e.g. Sharma Tuition Classes", fontSize = 11.sp) },
+                        leadingIcon = {
+                            Icon(imageVector = Icons.Default.School, contentDescription = null, modifier = Modifier.size(18.dp))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        singleLine = true
+                    )
+
+                    OutlinedTextField(
+                        value = upiId,
+                        onValueChange = {
+                            upiId = it
+                            viewModel.settings.upiId = it
+                        },
+                        label = { Text("Your UPI ID for Receipts (VPA)", fontSize = 11.sp) },
+                        placeholder = { Text("e.g. sharma@upi, name@ybl etc.", fontSize = 11.sp) },
+                        leadingIcon = {
+                            Icon(imageVector = Icons.Default.Payment, contentDescription = null, modifier = Modifier.size(18.dp))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        singleLine = true
+                    )
+                }
+            }
         }
 
         // Section 1: Security and Theme
@@ -1936,9 +2291,7 @@ fun SettingsPropertyTab(viewModel: MainViewModel) {
 @Composable
 fun TeacherToolsTab(viewModel: MainViewModel) {
     val context = LocalContext.current
-    var activeSubTab by remember { mutableStateOf(0) }
     val isDarkMode by viewModel.isDarkMode.collectAsState()
-    val sums by viewModel.portfolioSums.collectAsState()
     val students by viewModel.allStudents.collectAsState()
 
     Column(
@@ -1967,254 +2320,16 @@ fun TeacherToolsTab(viewModel: MainViewModel) {
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Diagnostic analytics simulator and generative AI assistant",
+                    text = "Generative AI Co-pilot assistant for teachers",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             }
         }
 
-        // Sub-tabs Segment
-        TabRow(
-            selectedTabIndex = activeSubTab,
-            containerColor = Color.Transparent,
-            contentColor = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Tab(
-                selected = activeSubTab == 0,
-                onClick = { activeSubTab = 0 },
-                text = { Text("Revenue Simulator", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-            )
-            Tab(
-                selected = activeSubTab == 1,
-                onClick = { activeSubTab = 1 },
-                text = { Text("Copilot AI Workspace", fontSize = 12.sp, fontWeight = FontWeight.Bold) }
-            )
-        }
-
-        // Animated sub-tab viewport
+        // Content viewport
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            if (activeSubTab == 0) {
-                RevenueSimulatorView(sums, isDarkMode)
-            } else {
-                GeminiCopilotView(viewModel, students, isDarkMode)
-            }
-        }
-    }
-}
-
-@Composable
-fun RevenueSimulatorView(sums: com.example.ui.PortfolioSummary, isDarkMode: Boolean) {
-    var recoveryRate by remember { mutableStateOf(50f) }
-    var newAdmissions by remember { mutableStateOf(5f) }
-    var feePerStudent by remember { mutableStateOf(1000f) }
-
-    val collected = sums.totalCollectedFees
-    val pending = sums.totalPendingDues
-    val totalPossible = if (sums.totalRequiredFees > 0) sums.totalRequiredFees else 1.0
-
-    // Calculations
-    val simulatedRecovery = pending * (recoveryRate / 100f)
-    val simulatedExpansion = newAdmissions * feePerStudent
-    val simulatedRevenuePool = collected + simulatedRecovery + simulatedExpansion
-    val growthPercent = if (collected > 0) {
-        ((simulatedRevenuePool - collected) / collected) * 100
-    } else {
-        100.0
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-        contentPadding = PaddingValues(vertical = 8.dp)
-    ) {
-        // Gauge / Visual Diagnostic Chart Card
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .premiumCardBorder(isDarkMode, RoundedCornerShape(16.dp)),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isDarkMode) Color(0xFF242229) else Color(0xFFF9F6FC)
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Simulated Collection Outlook",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    )
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Gauge Canvas
-                    Box(
-                        modifier = Modifier
-                            .size(170.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val baseColor = if (isDarkMode) Color(0xFF383541) else Color(0xFFEDE8F5)
-                        val primaryColor = MaterialTheme.colorScheme.primary
-                        val secondaryColor = Color(0xFF03DAC5)
-
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            // Background Arc (Track)
-                            drawArc(
-                                color = baseColor,
-                                startAngle = 135f,
-                                sweepAngle = 270f,
-                                useCenter = false,
-                                style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                    width = 14.dp.toPx(),
-                                    cap = androidx.compose.ui.graphics.StrokeCap.Round
-                                )
-                            )
-
-                            // Active simulated Arc
-                            val ratio = (simulatedRevenuePool / totalPossible).toFloat().coerceIn(0f, 1.2f)
-                            val finalSweep = 270f * (ratio / 1.2f) // max represents 120% target
-                            
-                            drawArc(
-                                color = if (ratio >= 1.0f) secondaryColor else primaryColor,
-                                startAngle = 135f,
-                                sweepAngle = finalSweep,
-                                useCenter = false,
-                                style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                    width = 14.dp.toPx(),
-                                    cap = androidx.compose.ui.graphics.StrokeCap.Round
-                                )
-                            )
-                        }
-
-                        // Text content at center of gauge
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = "₹${simulatedRevenuePool.toInt()}",
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = String.format("+%.1f%% Growth", growthPercent),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = if (growthPercent >= 0) Color(0xFF4CAF50) else Color(0xFFF44336)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Detail Metrics Breakdown
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Current Dues", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                            Text("₹${pending.toInt()}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Est. Recovery", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                            Text("₹${simulatedRecovery.toInt()}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("Expansion Pool", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                            Text("₹${simulatedExpansion.toInt()}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFF03DAC5))
-                        }
-                    }
-                }
-            }
-        }
-
-        // Sliders variables card
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .premiumCardBorder(isDarkMode, RoundedCornerShape(12.dp)),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isDarkMode) Color(0xFF1E1D22) else Color.White
-                )
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Text(
-                        text = "Simulation Variables",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-
-                    // Recovery Rate slider
-                    Column {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Outstanding Recovery Target", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface)
-                            Text("${recoveryRate.toInt()}%", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                        }
-                        Slider(
-                            value = recoveryRate,
-                            onValueChange = { recoveryRate = it },
-                            valueRange = 0f..100f,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-                    // New admissions slider
-                    Column {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Simulated New Enrollments", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface)
-                            Text("+${newAdmissions.toInt()} Students", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF03DAC5))
-                        }
-                        Slider(
-                            value = newAdmissions,
-                            onValueChange = { newAdmissions = it },
-                            valueRange = 0f..50f,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-
-                    // Average admission fee slider
-                    Column {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Standard Entrance/Course Fee", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface)
-                            Text("₹${feePerStudent.toInt()}", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
-                        }
-                        Slider(
-                            value = feePerStudent,
-                            onValueChange = { feePerStudent = it },
-                            valueRange = 100f..5000f,
-                            steps = 49,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            }
+            GeminiCopilotView(viewModel, students, isDarkMode)
         }
     }
 }
@@ -2340,27 +2455,28 @@ fun GeminiCopilotView(viewModel: MainViewModel, students: List<Student>, isDarkM
                                 return@Button
                             }
 
+                            val currentStudent = selectedStudent
                             val queryText = java.lang.StringBuilder()
                             when (selectedRole) {
                                 "Lesson Planner" -> {
                                     queryText.append("You are an expert curriculum planner. Create a high-fidelity lesson plan for the subject topic: '$subjectTopic'.")
-                                    if (selectedStudent != null) {
-                                        queryText.append(" Make accommodations or personalization strategies targeting student '${selectedStudent!!.name}'.")
+                                    if (currentStudent != null) {
+                                        queryText.append(" Make accommodations or personalization strategies targeting student '${currentStudent.name}'.")
                                     }
                                     queryText.append("\nOutput in structured sections: Summary, Core Concepts, Exercises, Quiz targets.")
                                 }
                                 "Quiz Questions" -> {
                                     queryText.append("Generate a premium 5-question multiple choice questionnaire on topic: '$subjectTopic'.")
-                                    if (selectedStudent != null) {
-                                        queryText.append(" Calibrate difficulty index customized to the learning levels of student '${selectedStudent!!.name}'.")
+                                    if (currentStudent != null) {
+                                        queryText.append(" Calibrate difficulty index customized to the learning levels of student '${currentStudent.name}'.")
                                     }
                                     queryText.append("\nState correct option and a single line explanation.")
                                 }
                                 "Reminder SMS" -> {
                                     queryText.append("Draft a polite, respectful monthly fee/due reminder message template to be sent to parents")
-                                    if (selectedStudent != null) {
-                                        queryText.append(" of student '${selectedStudent!!.name}'.")
-                                        val pendingDues = selectedStudent!!.totalFee - selectedStudent!!.paidAmount
+                                    if (currentStudent != null) {
+                                        queryText.append(" of student '${currentStudent.name}'.")
+                                        val pendingDues = currentStudent.totalFee - currentStudent.paidAmount
                                         if (pendingDues > 0) {
                                             queryText.append(" Keep them informed that their current outstanding balance is ₹${pendingDues.toInt()}.")
                                         } else {
@@ -2373,8 +2489,8 @@ fun GeminiCopilotView(viewModel: MainViewModel, students: List<Student>, isDarkM
                                 }
                                 else -> { // Progress Remarks
                                     queryText.append("Create a professional student performance feedback remarks template focusing on: '$subjectTopic'.")
-                                    if (selectedStudent != null) {
-                                        queryText.append(" Personalized for: '${selectedStudent!!.name}' (Roll Number ${selectedStudent!!.rollNum}).")
+                                    if (currentStudent != null) {
+                                        queryText.append(" Personalized for: '${currentStudent.name}' (Roll Number ${currentStudent.rollNum}).")
                                     }
                                     queryText.append("\nInclude 2 commendations and 1 actionable area of tutoring improvement.")
                                 }
@@ -2536,9 +2652,14 @@ fun GeminiCopilotView(viewModel: MainViewModel, students: List<Student>, isDarkM
                         }
                         HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
                     }
-                    items(students) { student ->
+                    items(
+                        items = students,
+                        key = { student -> student.id }
+                    ) { student ->
                         TextButton(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .animateItem(),
                             onClick = {
                                 selectedStudent = student
                                 showStudentDropdown = false

@@ -148,21 +148,35 @@ object ExportHelper {
 
         // Run on UI Thread to initialize WebView and dispatch to PrintManager
         context.runOnMainThread {
-            val webView = WebView(context)
-            webView.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    val printManager = context.getSystemService(Context.PRINT_SERVICE) as PrintManager
-                    val jobName = "TeacherLedger_Report_${System.currentTimeMillis()}"
-                    val printAdapter = webView.createPrintDocumentAdapter(jobName)
-                    
-                    printManager.print(
-                        jobName,
-                        printAdapter,
-                        PrintAttributes.Builder().build()
-                    )
+            try {
+                val webView = WebView(context)
+                webView.webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        try {
+                            val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
+                            if (printManager == null) {
+                                android.widget.Toast.makeText(context, "Print service not available on this device", android.widget.Toast.LENGTH_SHORT).show()
+                                return
+                            }
+                            val jobName = "TeacherLedger_Report_${System.currentTimeMillis()}"
+                            val printAdapter = webView.createPrintDocumentAdapter(jobName)
+                            
+                            printManager.print(
+                                jobName,
+                                printAdapter,
+                                PrintAttributes.Builder().build()
+                            )
+                        } catch (e: Exception) {
+                            Log.e("ExportHelper", "Failed on print callback", e)
+                            android.widget.Toast.makeText(context, "Printing error: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 }
+                webView.loadDataWithBaseURL(null, htmlPage.toString(), "text/html", "utf-8", null)
+            } catch (e: Exception) {
+                Log.e("ExportHelper", "Failed to initialize print", e)
+                android.widget.Toast.makeText(context, "Failed to initialize print: ${e.localizedMessage}", android.widget.Toast.LENGTH_SHORT).show()
             }
-            webView.loadDataWithBaseURL(null, htmlPage.toString(), "text/html", "utf-8", null)
         }
     }
 }
